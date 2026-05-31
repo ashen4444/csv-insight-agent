@@ -6,6 +6,7 @@ from backend.app.services.csv_loader import (
     load_csv_to_dataframe,
     save_uploaded_csv,
 )
+from backend.app.services.dataset_registry import DatasetRegistry
 from backend.app.services.duckdb_service import DuckDBService
 from backend.app.services.schema_profiler import SchemaProfiler
 
@@ -31,9 +32,18 @@ async def upload_csv(file: UploadFile = File(...)):
         original_filename=file.filename or saved_path.name,
     )
 
+    registry = DatasetRegistry()
+
+    dataset_metadata = registry.register_dataset(
+        original_filename=file.filename or saved_path.name,
+        saved_filename=saved_path.name,
+        table_name=table_name,
+        row_count=len(dataframe),
+        column_count=len(dataframe.columns),
+    )
+
     return {
-        "message": "CSV uploaded and profiled successfully.",
-        "saved_filename": saved_path.name,
-        "table_name": table_name,
+        "message": "CSV uploaded, stored, and profiled successfully.",
+        "dataset": dataset_metadata,
         "schema_profile": schema_profile,
     }
