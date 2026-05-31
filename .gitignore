@@ -1,0 +1,27 @@
+# Environment
+.env
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+
+# Uploaded/private data
+backend/data/uploads/*
+backend/data/duckdb/*
+backend/data/exports/*
+
+# Keep folder structure
+!backend/data/uploads/.gitkeep
+!backend/data/duckdb/.gitkeep
+!backend/data/exports/.gitkeep
+
+# Frontend
+node_modules/
+.next/
+dist/
+
+# IDE
+.idea/
+.vscode/
