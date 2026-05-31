@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 from fastapi import HTTPException, UploadFile, status
 
-from backend.app.core.config import (
+from app.core.config import (
     ALLOWED_FILE_EXTENSIONS,
     MAX_UPLOAD_SIZE_BYTES,
     UPLOAD_DIR,

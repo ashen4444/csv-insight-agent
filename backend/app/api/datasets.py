@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, status
 
-from backend.app.services.dataset_registry import DatasetRegistry
+from app.services.dataset_registry import DatasetRegistry
 
 router = APIRouter(prefix="/datasets", tags=["Datasets"])
 

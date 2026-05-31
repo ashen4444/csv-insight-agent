@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import duckdb
 
-from backend.app.core.config import DUCKDB_PATH
+from app.core.config import DUCKDB_PATH
 
 
 class DatasetRegistry:
@@ -134,3 +134,15 @@ class DatasetRegistry:
             "column_count": row[5],
             "uploaded_at": row[6].isoformat() if row[6] else None,
         }
+
+
+def list_datasets() -> list[dict[str, Any]]:
+    registry = DatasetRegistry()
+    return registry.list_datasets()
+
+
+def get_dataset_by_id(dataset_id: str) -> dict[str, Any] | None:
+    registry = DatasetRegistry()
+    return registry.get_dataset(dataset_id)
+
+

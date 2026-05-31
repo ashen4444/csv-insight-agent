@@ -2,13 +2,13 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, UploadFile
 
-from backend.app.services.csv_loader import (
+from app.services.csv_loader import (
     load_csv_to_dataframe,
     save_uploaded_csv,
 )
-from backend.app.services.dataset_registry import DatasetRegistry
-from backend.app.services.duckdb_service import DuckDBService
-from backend.app.services.schema_profiler import SchemaProfiler
+from app.services.dataset_registry import DatasetRegistry
+from app.services.duckdb_service import DuckDBService
+from app.services.schema_profiler import SchemaProfiler
 
 router = APIRouter(prefix="/upload", tags=["CSV Upload"])
 

@@ -3,7 +3,7 @@ import re
 import duckdb
 import pandas as pd
 
-from backend.app.core.config import DUCKDB_PATH
+from app.core.config import DUCKDB_PATH
 
 
 class DuckDBService:
