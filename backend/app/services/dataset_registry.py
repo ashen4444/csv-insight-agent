@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -23,21 +24,42 @@ class DatasetRegistry:
                     table_name VARCHAR NOT NULL,
                     row_count INTEGER NOT NULL,
                     column_count INTEGER NOT NULL,
+                    schema_profile JSON,
                     uploaded_at TIMESTAMP NOT NULL
                 )
                 """
             )
+
+            existing_columns = connection.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'dataset_registry'
+                """
+            ).fetchall()
+
+            existing_column_names = {column[0] for column in existing_columns}
+
+            if "schema_profile" not in existing_column_names:
+                connection.execute(
+                    """
+                    ALTER TABLE dataset_registry
+                    ADD COLUMN schema_profile JSON
+                    """
+                )
 
     def register_dataset(
         self,
         original_filename: str,
         saved_filename: str,
         table_name: str,
-        row_count: int,
-        column_count: int,
+        schema_profile: dict[str, Any],
     ) -> dict[str, Any]:
         dataset_id = uuid4().hex[:12]
         uploaded_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        row_count = schema_profile["dataset"]["row_count"]
+        column_count = schema_profile["dataset"]["column_count"]
 
         with duckdb.connect(str(self.database_path)) as connection:
             connection.execute(
@@ -49,9 +71,10 @@ class DatasetRegistry:
                     table_name,
                     row_count,
                     column_count,
+                    schema_profile,
                     uploaded_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     dataset_id,
@@ -60,6 +83,7 @@ class DatasetRegistry:
                     table_name,
                     row_count,
                     column_count,
+                    json.dumps(schema_profile),
                     uploaded_at,
                 ],
             )
@@ -71,6 +95,7 @@ class DatasetRegistry:
             "table_name": table_name,
             "row_count": row_count,
             "column_count": column_count,
+            "schema_profile": schema_profile,
             "uploaded_at": uploaded_at.isoformat(),
         }
 
@@ -85,6 +110,7 @@ class DatasetRegistry:
                     table_name,
                     row_count,
                     column_count,
+                    schema_profile,
                     uploaded_at
                 FROM dataset_registry
                 ORDER BY uploaded_at DESC
@@ -99,7 +125,8 @@ class DatasetRegistry:
                 "table_name": row[3],
                 "row_count": row[4],
                 "column_count": row[5],
-                "uploaded_at": row[6].isoformat() if row[6] else None,
+                "schema_profile": json.loads(row[6]) if row[6] else None,
+                "uploaded_at": row[7].isoformat() if row[7] else None,
             }
             for row in rows
         ]
@@ -115,6 +142,7 @@ class DatasetRegistry:
                     table_name,
                     row_count,
                     column_count,
+                    schema_profile,
                     uploaded_at
                 FROM dataset_registry
                 WHERE dataset_id = ?
@@ -132,7 +160,8 @@ class DatasetRegistry:
             "table_name": row[3],
             "row_count": row[4],
             "column_count": row[5],
-            "uploaded_at": row[6].isoformat() if row[6] else None,
+            "schema_profile": json.loads(row[6]) if row[6] else None,
+            "uploaded_at": row[7].isoformat() if row[7] else None,
         }
 
 
@@ -144,5 +173,3 @@ def list_datasets() -> list[dict[str, Any]]:
 def get_dataset_by_id(dataset_id: str) -> dict[str, Any] | None:
     registry = DatasetRegistry()
     return registry.get_dataset(dataset_id)
-
-

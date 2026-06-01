@@ -38,8 +38,7 @@ async def upload_csv(file: UploadFile = File(...)):
         original_filename=file.filename or saved_path.name,
         saved_filename=saved_path.name,
         table_name=table_name,
-        row_count=len(dataframe),
-        column_count=len(dataframe.columns),
+        schema_profile=schema_profile,
     )
 
     return {

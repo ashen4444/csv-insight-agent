@@ -1,11 +1,11 @@
 # backend/app/prompts/sql_generation_prompt.py
 
-from typing import Dict, Any, List
+from typing import Any
 
 
 def build_sql_generation_prompt(
     table_name: str,
-    schema_profile: Dict[str, Any],
+    schema_profile: dict[str, Any],
     question: str,
 ) -> str:
     columns = schema_profile.get("columns", [])
@@ -25,6 +25,8 @@ STRICT RULES:
 - Use only the provided table name.
 - Use only the provided column names.
 - Do not invent columns.
+- If the user's wording does not exactly match a column name, choose the closest matching provided column.
+- Always wrap table names and column names in double quotes.
 - Do not explain anything.
 - Do not use markdown.
 - Return only the SQL query.
@@ -42,7 +44,7 @@ Return only the SQL query.
 """.strip()
 
 
-def _format_columns(columns: List[Dict[str, Any]]) -> str:
+def _format_columns(columns: list[dict[str, Any]]) -> str:
     if not columns:
         return "- No column metadata available"
 
@@ -50,7 +52,7 @@ def _format_columns(columns: List[Dict[str, Any]]) -> str:
 
     for column in columns:
         name = column.get("name")
-        dtype = column.get("type") or column.get("inferred_type") or "UNKNOWN"
+        dtype = column.get("inferred_type") or column.get("pandas_dtype") or "UNKNOWN"
         null_count = column.get("null_count", "UNKNOWN")
         unique_count = column.get("unique_count", "UNKNOWN")
 

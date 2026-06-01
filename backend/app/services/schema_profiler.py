@@ -35,8 +35,37 @@ class SchemaProfiler:
             "max": float(non_null_series.max()),
             "mean": float(non_null_series.mean()),
             "median": float(non_null_series.median()),
-            "std": float(non_null_series.std()) if len(non_null_series) > 1 else 0.0,
+            "std": (
+                float(non_null_series.std())
+                if len(non_null_series) > 1
+                else 0.0
+            ),
         }
+
+    @staticmethod
+    def get_sample_values(
+        series: pd.Series,
+        max_samples: int = 5,
+    ) -> list[str] | None:
+        """
+        Returns small safe categorical samples for prompt grounding.
+        Avoids exposing full dataset rows.
+        """
+
+        if pd.api.types.is_numeric_dtype(series):
+            return None
+
+        unique_values = (
+            series.dropna()
+            .astype(str)
+            .unique()
+            .tolist()
+        )
+
+        if not unique_values:
+            return None
+
+        return unique_values[:max_samples]
 
     @classmethod
     def generate_profile(
@@ -45,6 +74,7 @@ class SchemaProfiler:
         table_name: str,
         original_filename: str,
     ) -> dict[str, Any]:
+
         row_count = len(dataframe)
         column_count = len(dataframe.columns)
 
@@ -63,11 +93,16 @@ class SchemaProfiler:
                     "inferred_type": cls.infer_column_type(series),
                     "null_count": null_count,
                     "non_null_count": non_null_count,
-                    "null_percentage": round((null_count / row_count) * 100, 2)
-                    if row_count > 0
-                    else 0,
-                    "unique_count": int(series.nunique(dropna=True)),
+                    "null_percentage": (
+                        round((null_count / row_count) * 100, 2)
+                        if row_count > 0
+                        else 0
+                    ),
+                    "unique_count": int(
+                        series.nunique(dropna=True)
+                    ),
                     "numeric_stats": cls.get_numeric_stats(series),
+                    "sample_values": cls.get_sample_values(series),
                 }
             )
 
@@ -80,7 +115,8 @@ class SchemaProfiler:
             },
             "columns": columns,
             "privacy_note": (
-                "Raw CSV rows are not included. This profile only contains "
-                "schema metadata and safe summary statistics."
+                "Raw CSV rows are not included. "
+                "This profile only contains schema metadata "
+                "and safe summary statistics."
             ),
         }
