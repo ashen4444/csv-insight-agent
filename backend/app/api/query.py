@@ -27,9 +27,12 @@ def ask_dataset_question(request: QueryRequest):
         question=request.question,
     )
 
-    validate_sql(generated_sql)
+    try:
+        validate_sql(generated_sql, schema_context)
+        results = execute_query(generated_sql)
 
-    results = execute_query(generated_sql)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
     return {
         "dataset_id": request.dataset_id,
