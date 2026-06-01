@@ -1,5 +1,8 @@
 from pathlib import Path
 
+from pydantic_settings import BaseSettings
+
+
 BASE_DIR = Path(__file__).resolve().parents[2]
 
 DATA_DIR = BASE_DIR / "data"
@@ -13,6 +16,17 @@ ALLOWED_FILE_EXTENSIONS = {".csv"}
 
 MAX_UPLOAD_SIZE_MB = 25
 MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+
+
+class Settings(BaseSettings):
+    OPENAI_API_KEY: str
+    OPENAI_MODEL: str = "gpt-4o-mini"
+
+    class Config:
+        env_file = BASE_DIR / ".env"
+
+
+settings = Settings()
 
 
 def ensure_data_directories() -> None:
