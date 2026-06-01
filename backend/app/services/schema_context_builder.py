@@ -12,4 +12,7 @@ def build_schema_context(dataset_id: str):
         "table_name": dataset["table_name"],
         "row_count": dataset["row_count"],
         "column_count": dataset["column_count"],
+        "schema_profile": {
+            "columns": dataset.get("columns", [])
+        },
     }

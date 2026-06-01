@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from app.services.schema_context_builder import build_schema_context
 from app.services.sql_validator import validate_sql
 from app.services.query_executor import execute_query
+from app.services.sql_generator import generate_sql_from_question
 
 router = APIRouter(prefix="/api/query", tags=["Query"])
 
@@ -20,8 +21,11 @@ def ask_dataset_question(request: QueryRequest):
     if schema_context is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
-    # Temporary hardcoded SQL for foundation testing
-    generated_sql = f'SELECT * FROM "{schema_context["table_name"]}" LIMIT 5'
+    generated_sql = generate_sql_from_question(
+        table_name=schema_context["table_name"],
+        schema_profile=schema_context["schema_profile"],
+        question=request.question,
+    )
 
     validate_sql(generated_sql)
 
