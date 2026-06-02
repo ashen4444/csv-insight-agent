@@ -66,12 +66,18 @@ def validate_sql(sql: str, schema_context: dict) -> None:
             f"Invalid table reference. Expected only table: {expected_table}"
         )
 
+    select_aliases = {
+        alias.alias
+        for alias in parsed.find_all(exp.Alias)
+        if alias.alias
+    }
+
     referenced_columns = {
         column.name
         for column in parsed.find_all(exp.Column)
     }
 
-    invalid_columns = referenced_columns - valid_columns
+    invalid_columns = referenced_columns - valid_columns - select_aliases
 
     if invalid_columns:
         raise ValueError(
