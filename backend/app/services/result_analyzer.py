@@ -23,8 +23,13 @@ TABLE_ONLY_KEYWORDS = {
 def analyze_results(
     results: list[dict[str, Any]],
     question: str | None = None,
+    visualization_intent: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if _is_table_only_question(question):
+    visualization_intent = visualization_intent or {}
+    visualization_requested = visualization_intent.get("visualization_requested", False)
+    requested_chart_type = visualization_intent.get("requested_chart_type")
+
+    if not visualization_requested and _is_table_only_question(question):
         return _analysis(
             result_type="raw_table_preview",
             recommended_visualization="table",
@@ -76,6 +81,30 @@ def analyze_results(
 
     row_count = len(results)
 
+    if visualization_requested and requested_chart_type == "scatter_plot":
+        if len(numeric_columns) >= 2:
+            return _analysis(
+                result_type="numeric_relationship",
+                recommended_visualization="scatter_plot",
+                is_visualizable=True,
+                x_axis=numeric_columns[0],
+                y_axis=numeric_columns[1],
+                confidence=0.88,
+                reason="Explicit scatter plot request detected with two numeric columns.",
+            )
+
+    if visualization_requested and requested_chart_type == "line_chart":
+        if len(datetime_columns) >= 1 and len(numeric_columns) >= 1:
+            return _analysis(
+                result_type="time_series",
+                recommended_visualization="line_chart",
+                is_visualizable=True,
+                x_axis=datetime_columns[0],
+                y_axis=numeric_columns[0],
+                confidence=0.88,
+                reason="Explicit line chart request detected with date/time and numeric columns.",
+            )
+
     if row_count == 1 and len(columns) == 1 and len(numeric_columns) == 1:
         return _analysis(
             result_type="single_metric",
@@ -98,7 +127,7 @@ def analyze_results(
             reason="Detected a date/time column and a numeric column.",
         )
 
-    if row_count > MAX_CHART_ROWS:
+    if row_count > MAX_CHART_ROWS and not visualization_requested:
         return _analysis(
             result_type="large_tabular_result",
             recommended_visualization="table",
