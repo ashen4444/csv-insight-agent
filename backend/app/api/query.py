@@ -5,6 +5,7 @@ from app.services.schema_context_builder import build_schema_context
 from app.services.sql_validator import validate_sql
 from app.services.query_executor import execute_query
 from app.services.sql_generator import generate_sql_from_question
+from app.services.query_audit_logger import write_query_audit_log
 
 router = APIRouter(prefix="/api/query", tags=["Query"])
 
@@ -42,16 +43,30 @@ def ask_dataset_question(request: QueryRequest):
     schema_context = build_schema_context(request.dataset_id)
 
     if schema_context is None:
+        write_query_audit_log({
+            "dataset_id": request.dataset_id,
+            "question": request.question,
+            "status": "dataset_not_found",
+            "error_message": "Dataset not found",
+        })
+
         raise HTTPException(status_code=404, detail="Dataset not found")
 
     if contains_unsafe_intent(request.question):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Unsafe data modification requests are not supported. "
-                "Only read-only analytical questions are allowed."
-            ),
+        error_message = (
+            "Unsafe data modification requests are not supported. "
+            "Only read-only analytical questions are allowed."
         )
+
+        write_query_audit_log({
+            "dataset_id": request.dataset_id,
+            "question": request.question,
+            "table_name": schema_context["table_name"],
+            "status": "unsafe_intent_blocked",
+            "error_message": error_message,
+        })
+
+        raise HTTPException(status_code=400, detail=error_message)
 
     generated_sql = generate_sql_from_question(
         table_name=schema_context["table_name"],
@@ -64,7 +79,28 @@ def ask_dataset_question(request: QueryRequest):
         execution_result = execute_query(generated_sql)
 
     except ValueError as exc:
+        write_query_audit_log({
+            "dataset_id": request.dataset_id,
+            "question": request.question,
+            "table_name": schema_context["table_name"],
+            "generated_sql": generated_sql,
+            "status": "failed",
+            "error_message": str(exc),
+        })
+
         raise HTTPException(status_code=400, detail=str(exc))
+
+    write_query_audit_log({
+        "dataset_id": request.dataset_id,
+        "question": request.question,
+        "table_name": schema_context["table_name"],
+        "generated_sql": generated_sql,
+        "executed_sql": execution_result["sql"],
+        "row_count": execution_result["row_count"],
+        "execution_time_ms": execution_result["execution_time_ms"],
+        "status": "success",
+        "error_message": None,
+    })
 
     return {
         "dataset_id": request.dataset_id,

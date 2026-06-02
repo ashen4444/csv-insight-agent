@@ -12,6 +12,8 @@ EXPORT_DIR = DATA_DIR / "exports"
 
 DUCKDB_PATH = DUCKDB_DIR / "csvinsight.duckdb"
 
+QUERY_AUDIT_LOG_PATH = DATA_DIR / "query_audit_logs.jsonl"
+
 ALLOWED_FILE_EXTENSIONS = {".csv"}
 
 MAX_UPLOAD_SIZE_MB = 25
