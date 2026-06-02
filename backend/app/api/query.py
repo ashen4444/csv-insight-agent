@@ -8,7 +8,7 @@ from app.services.sql_generator import generate_sql_from_question
 from app.services.query_audit_logger import write_query_audit_log
 from app.services.result_analyzer import analyze_results
 from app.services.visualization_intent_detector import detect_visualization_intent
-
+from app.services.chart_selector import select_chart
 
 router = APIRouter(prefix="/api/query", tags=["Query"])
 
@@ -87,6 +87,11 @@ def ask_dataset_question(request: QueryRequest):
             question=request.question,
         )
 
+        chart_selection = select_chart(
+            analysis=analysis,
+            visualization_intent=visualization_intent,
+        )
+
     except ValueError as exc:
         write_query_audit_log({
             "dataset_id": request.dataset_id,
@@ -117,4 +122,5 @@ def ask_dataset_question(request: QueryRequest):
         **execution_result,
         "analysis": analysis,
         "visualization_intent": visualization_intent,
+        "chart_selection": chart_selection,
     }
