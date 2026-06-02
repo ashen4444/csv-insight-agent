@@ -1,7 +1,8 @@
 import math
+import threading
 import time
-from decimal import Decimal
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 import duckdb
@@ -10,11 +11,12 @@ import pandas as pd
 import sqlglot
 from sqlglot import exp
 
-from app.core.config import DUCKDB_PATH
-
-
-DEFAULT_LIMIT = 100
-MAX_LIMIT = 100
+from app.core.config import (
+    DEFAULT_QUERY_LIMIT,
+    DUCKDB_PATH,
+    MAX_QUERY_LIMIT,
+    QUERY_TIMEOUT_SECONDS,
+)
 
 
 def apply_safe_limit(sql: str) -> str:
@@ -23,7 +25,10 @@ def apply_safe_limit(sql: str) -> str:
     limit_expression = parsed.args.get("limit")
 
     if limit_expression is None:
-        parsed.set("limit", exp.Limit(expression=exp.Literal.number(DEFAULT_LIMIT)))
+        parsed.set(
+            "limit",
+            exp.Limit(expression=exp.Literal.number(DEFAULT_QUERY_LIMIT)),
+        )
         return parsed.sql(dialect="duckdb")
 
     current_limit = limit_expression.expression
@@ -32,13 +37,17 @@ def apply_safe_limit(sql: str) -> str:
         try:
             limit_value = int(current_limit.this)
 
-            if limit_value > MAX_LIMIT:
-                parsed.set("limit", exp.Limit(expression=exp.Literal.number(MAX_LIMIT)))
-                return parsed.sql(dialect="duckdb")
+            if limit_value > MAX_QUERY_LIMIT:
+                parsed.set(
+                    "limit",
+                    exp.Limit(expression=exp.Literal.number(MAX_QUERY_LIMIT)),
+                )
 
         except ValueError:
-            parsed.set("limit", exp.Limit(expression=exp.Literal.number(MAX_LIMIT)))
-            return parsed.sql(dialect="duckdb")
+            parsed.set(
+                "limit",
+                exp.Limit(expression=exp.Literal.number(MAX_QUERY_LIMIT)),
+            )
 
     return parsed.sql(dialect="duckdb")
 
@@ -50,10 +59,10 @@ def serialize_value(value: Any) -> Any:
     if isinstance(value, float) and math.isnan(value):
         return None
 
-    if isinstance(value, (np.integer,)):
+    if isinstance(value, np.integer):
         return int(value)
 
-    if isinstance(value, (np.floating,)):
+    if isinstance(value, np.floating):
         if math.isnan(float(value)):
             return None
         return float(value)
@@ -79,8 +88,29 @@ def execute_query(sql: str) -> dict:
 
     start_time = time.perf_counter()
 
-    with duckdb.connect(str(DUCKDB_PATH)) as conn:
-        result_df = conn.execute(safe_sql).fetchdf()
+    try:
+        with duckdb.connect(str(DUCKDB_PATH)) as conn:
+            timeout_timer = threading.Timer(
+                QUERY_TIMEOUT_SECONDS,
+                conn.interrupt,
+            )
+
+            timeout_timer.start()
+
+            try:
+                result_df = conn.execute(safe_sql).fetchdf()
+            finally:
+                timeout_timer.cancel()
+
+    except duckdb.Error as exc:
+        execution_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
+
+        raise ValueError(
+            f"Query execution failed or exceeded timeout limit "
+            f"of {QUERY_TIMEOUT_SECONDS} seconds. "
+            f"Execution time: {execution_time_ms} ms. "
+            f"Details: {exc}"
+        ) from exc
 
     execution_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
 
