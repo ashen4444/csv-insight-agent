@@ -6,6 +6,8 @@ from app.services.sql_validator import validate_sql
 from app.services.query_executor import execute_query
 from app.services.sql_generator import generate_sql_from_question
 from app.services.query_audit_logger import write_query_audit_log
+from app.services.result_analyzer import analyze_results
+
 
 router = APIRouter(prefix="/api/query", tags=["Query"])
 
@@ -77,6 +79,7 @@ def ask_dataset_question(request: QueryRequest):
     try:
         validate_sql(generated_sql, schema_context)
         execution_result = execute_query(generated_sql)
+        analysis = analyze_results(execution_result["results"])
 
     except ValueError as exc:
         write_query_audit_log({
@@ -106,4 +109,5 @@ def ask_dataset_question(request: QueryRequest):
         "dataset_id": request.dataset_id,
         "question": request.question,
         **execution_result,
+        "analysis": analysis,
     }
