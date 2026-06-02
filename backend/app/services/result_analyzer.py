@@ -6,27 +6,58 @@ from typing import Any
 NUMERIC_TYPES = (int, float, Decimal)
 DATE_TYPES = (date, datetime)
 
+MAX_CHART_ROWS = 30
 
-def analyze_results(results: list[dict[str, Any]]) -> dict[str, Any]:
+TABLE_ONLY_KEYWORDS = {
+    "list",
+    "first",
+    "rows",
+    "row",
+    "records",
+    "record",
+    "data",
+    "table",
+}
+
+
+def analyze_results(
+    results: list[dict[str, Any]],
+    question: str | None = None,
+) -> dict[str, Any]:
+    if _is_table_only_question(question):
+        return _analysis(
+            result_type="raw_table_preview",
+            recommended_visualization="table",
+            is_visualizable=False,
+            x_axis=None,
+            y_axis=None,
+            confidence=0.95,
+            reason="Question asks for raw rows or table-style output.",
+        )
+
     if not results:
-        return {
-            "result_type": "empty",
-            "recommended_visualization": "table",
-            "x_axis": None,
-            "y_axis": None,
-            "reason": "Result set is empty.",
-        }
+        return _analysis(
+            result_type="empty",
+            recommended_visualization="table",
+            is_visualizable=False,
+            x_axis=None,
+            y_axis=None,
+            confidence=1.0,
+            reason="Result set is empty.",
+        )
 
     columns = list(results[0].keys())
 
     if len(columns) == 0:
-        return {
-            "result_type": "empty",
-            "recommended_visualization": "table",
-            "x_axis": None,
-            "y_axis": None,
-            "reason": "No columns detected in the result.",
-        }
+        return _analysis(
+            result_type="empty",
+            recommended_visualization="table",
+            is_visualizable=False,
+            x_axis=None,
+            y_axis=None,
+            confidence=1.0,
+            reason="No columns detected in the result.",
+        )
 
     numeric_columns = [
         column for column in columns
@@ -46,48 +77,101 @@ def analyze_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     row_count = len(results)
 
     if row_count == 1 and len(columns) == 1 and len(numeric_columns) == 1:
-        return {
-            "result_type": "single_metric",
-            "recommended_visualization": "metric_card",
-            "x_axis": None,
-            "y_axis": numeric_columns[0],
-            "reason": "Detected a single numeric value.",
-        }
+        return _analysis(
+            result_type="single_metric",
+            recommended_visualization="metric_card",
+            is_visualizable=True,
+            x_axis=None,
+            y_axis=numeric_columns[0],
+            confidence=0.98,
+            reason="Detected a single numeric value.",
+        )
 
     if len(datetime_columns) >= 1 and len(numeric_columns) >= 1:
-        return {
-            "result_type": "time_series",
-            "recommended_visualization": "line_chart",
-            "x_axis": datetime_columns[0],
-            "y_axis": numeric_columns[0],
-            "reason": "Detected a date/time column and a numeric column.",
-        }
+        return _analysis(
+            result_type="time_series",
+            recommended_visualization="line_chart",
+            is_visualizable=True,
+            x_axis=datetime_columns[0],
+            y_axis=numeric_columns[0],
+            confidence=0.95,
+            reason="Detected a date/time column and a numeric column.",
+        )
+
+    if row_count > MAX_CHART_ROWS:
+        return _analysis(
+            result_type="large_tabular_result",
+            recommended_visualization="table",
+            is_visualizable=False,
+            x_axis=None,
+            y_axis=None,
+            confidence=0.85,
+            reason="Result has too many rows for a clear default chart.",
+        )
 
     if len(categorical_columns) == 1 and len(numeric_columns) == 1:
-        return {
-            "result_type": "categorical_numeric",
-            "recommended_visualization": "bar_chart",
-            "x_axis": categorical_columns[0],
-            "y_axis": numeric_columns[0],
-            "reason": "Detected one categorical column and one numeric column.",
-        }
+        return _analysis(
+            result_type="categorical_numeric",
+            recommended_visualization="bar_chart",
+            is_visualizable=True,
+            x_axis=categorical_columns[0],
+            y_axis=numeric_columns[0],
+            confidence=0.92,
+            reason="Detected one categorical column and one numeric column.",
+        )
 
     if len(numeric_columns) >= 2 and row_count > 1:
-        return {
-            "result_type": "numeric_relationship",
-            "recommended_visualization": "scatter_plot",
-            "x_axis": numeric_columns[0],
-            "y_axis": numeric_columns[1],
-            "reason": "Detected two numeric columns across multiple rows.",
-        }
+        return _analysis(
+            result_type="numeric_relationship",
+            recommended_visualization="scatter_plot",
+            is_visualizable=True,
+            x_axis=numeric_columns[0],
+            y_axis=numeric_columns[1],
+            confidence=0.90,
+            reason="Detected two numeric columns across multiple rows.",
+        )
 
+    return _analysis(
+        result_type="tabular",
+        recommended_visualization="table",
+        is_visualizable=False,
+        x_axis=None,
+        y_axis=None,
+        confidence=0.60,
+        reason="Result is best represented as a table.",
+    )
+
+
+def _analysis(
+    result_type: str,
+    recommended_visualization: str,
+    is_visualizable: bool,
+    x_axis: str | None,
+    y_axis: str | None,
+    confidence: float,
+    reason: str,
+) -> dict[str, Any]:
     return {
-        "result_type": "tabular",
-        "recommended_visualization": "table",
-        "x_axis": None,
-        "y_axis": None,
-        "reason": "Result is best represented as a table.",
+        "result_type": result_type,
+        "recommended_visualization": recommended_visualization,
+        "is_visualizable": is_visualizable,
+        "x_axis": x_axis,
+        "y_axis": y_axis,
+        "confidence": confidence,
+        "reason": reason,
     }
+
+
+def _is_table_only_question(question: str | None) -> bool:
+    if question is None:
+        return False
+
+    question_lower = question.lower()
+
+    return any(
+        keyword in question_lower
+        for keyword in TABLE_ONLY_KEYWORDS
+    )
 
 
 def _is_numeric_column(results: list[dict[str, Any]], column: str) -> bool:

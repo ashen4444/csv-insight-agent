@@ -79,7 +79,10 @@ def ask_dataset_question(request: QueryRequest):
     try:
         validate_sql(generated_sql, schema_context)
         execution_result = execute_query(generated_sql)
-        analysis = analyze_results(execution_result["results"])
+        analysis = analyze_results(
+            results=execution_result["results"],
+            question=request.question,
+        )
 
     except ValueError as exc:
         write_query_audit_log({
