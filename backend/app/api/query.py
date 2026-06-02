@@ -7,6 +7,7 @@ from app.services.query_executor import execute_query
 from app.services.sql_generator import generate_sql_from_question
 from app.services.query_audit_logger import write_query_audit_log
 from app.services.result_analyzer import analyze_results
+from app.services.visualization_intent_detector import detect_visualization_intent
 
 
 router = APIRouter(prefix="/api/query", tags=["Query"])
@@ -76,6 +77,8 @@ def ask_dataset_question(request: QueryRequest):
         question=request.question,
     )
 
+    visualization_intent = detect_visualization_intent(request.question)
+
     try:
         validate_sql(generated_sql, schema_context)
         execution_result = execute_query(generated_sql)
@@ -113,4 +116,5 @@ def ask_dataset_question(request: QueryRequest):
         "question": request.question,
         **execution_result,
         "analysis": analysis,
+        "visualization_intent": visualization_intent,
     }
