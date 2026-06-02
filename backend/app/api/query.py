@@ -10,6 +10,7 @@ from app.services.result_analyzer import analyze_results
 from app.services.visualization_intent_detector import detect_visualization_intent
 from app.services.chart_selector import select_chart
 from app.services.chart_payload_builder import build_chart_payload
+from app.services.chart_validator import validate_chart_selection
 
 router = APIRouter(prefix="/api/query", tags=["Query"])
 
@@ -100,6 +101,12 @@ def ask_dataset_question(request: QueryRequest):
             chart_selection=chart_selection,
         )
 
+        chart_warning = validate_chart_selection(
+            analysis=analysis,
+            chart_selection=chart_selection,
+            chart_payload=chart_payload,
+        )
+
     except ValueError as exc:
         write_query_audit_log({
             "dataset_id": request.dataset_id,
@@ -132,4 +139,5 @@ def ask_dataset_question(request: QueryRequest):
         "visualization_intent": visualization_intent,
         "chart_selection": chart_selection,
         "chart_payload": chart_payload,
+        "chart_warning": chart_warning,
     }
