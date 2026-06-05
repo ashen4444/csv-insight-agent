@@ -22,6 +22,15 @@ from app.agents.text_to_sql_agent import (
     TextToSQLErrorType,
 )
 
+from app.agents.sql_validator_agent import (
+    SQLValidationErrorType,
+    SQLValidationStatus,
+    SQLValidatorAgent,
+    SQLValidatorAgentInput,
+    SQLValidatorAgentOutput,
+    SQLValidatorSchemaContextSource,
+)
+
 __all__ = [
     "IntentRouterAgent",
     "IntentRouterResult",
@@ -41,4 +50,10 @@ __all__ = [
     "TextToSQLAgentInput",
     "TextToSQLAgentOutput",
     "TextToSQLErrorType",
+    "SQLValidatorAgent",
+    "SQLValidatorAgentInput",
+    "SQLValidatorAgentOutput",
+    "SQLValidationStatus",
+    "SQLValidationErrorType",
+    "SQLValidatorSchemaContextSource",
 ]
