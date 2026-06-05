@@ -14,6 +14,14 @@ from app.agents.intent_router_agent import (
     UnsupportedReason,
 )
 
+from app.agents.text_to_sql_agent import (
+    SchemaContextSource,
+    TextToSQLAgent,
+    TextToSQLAgentInput,
+    TextToSQLAgentOutput,
+    TextToSQLErrorType,
+)
+
 __all__ = [
     "IntentRouterAgent",
     "IntentRouterResult",
@@ -28,4 +36,9 @@ __all__ = [
     "UnsupportedPolicy",
     "UnsupportedReason",
     "UnsupportedMatch",
+    "SchemaContextSource",
+    "TextToSQLAgent",
+    "TextToSQLAgentInput",
+    "TextToSQLAgentOutput",
+    "TextToSQLErrorType",
 ]
