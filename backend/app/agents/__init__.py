@@ -39,6 +39,18 @@ from app.agents.query_executor_agent import (
     QueryExecutorErrorType,
 )
 
+from app.agents.data_quality_agent import (
+    DataQualityAgent,
+    DataQualityAgentInput,
+    DataQualityAgentOutput,
+    DataQualityErrorType,
+    DataQualityRecommendation,
+    DataQualityRecommendationPriority,
+    DataQualityStatus,
+    DataQualityWarning,
+    DataQualityWarningSeverity,
+)
+
 __all__ = [
     "IntentRouterAgent",
     "IntentRouterResult",
@@ -69,4 +81,13 @@ __all__ = [
     "QueryExecutorAgentOutput",
     "QueryExecutionStatus",
     "QueryExecutorErrorType",
+    "DataQualityAgent",
+    "DataQualityAgentInput",
+    "DataQualityAgentOutput",
+    "DataQualityStatus",
+    "DataQualityErrorType",
+    "DataQualityWarning",
+    "DataQualityWarningSeverity",
+    "DataQualityRecommendation",
+    "DataQualityRecommendationPriority",
 ]
