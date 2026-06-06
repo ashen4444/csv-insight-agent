@@ -6,19 +6,21 @@ This document records the architectural and implementation decisions made during
 
 The Text-to-SQL Agent is part of the final production-oriented multi-agent workflow. It is designed as an independently testable agent-level wrapper around the existing SQL generation service, while remaining ready for future LangGraph orchestration through the Supervisor Agent.
 
+This document also records the later schema-context correction made after formalizing the Data Profiler Agent wrapper.
+
 ---
 
 ## Agent Role
 
-The Text-to-SQL Agent is responsible for converting a user’s natural language analytical question into a SQL query using the uploaded CSV dataset schema context.
+The Text-to-SQL Agent is responsible for converting a user’s natural language analytical question into a SQL query using trusted schema context for the uploaded CSV dataset.
 
-The agent does not directly perform SQL validation, SQL execution, result analysis, chart generation, or final answer formatting. Those responsibilities belong to separate agents or service-layer components.
+The agent does not directly perform SQL validation, SQL execution, result analysis, chart generation, data-quality analysis, or final answer formatting. Those responsibilities belong to separate agents or service-layer components.
 
 The Text-to-SQL Agent focuses on:
 
-* accepting structured input,
-* resolving schema context,
-* respecting model/API availability decisions,
+* accepting restricted structured input,
+* resolving trusted schema context internally from `dataset_id`,
+* validating schema context before SQL generation,
 * calling the existing SQL generation service,
 * returning structured success/error output,
 * exposing metadata useful for audit, debugging, and future orchestration.
@@ -82,14 +84,14 @@ The responsibility boundary is:
 ```text
 TextToSQLAgent
     ↓
-schema_context_builder.py
+schema_context_builder.py / Data Profiler-compatible schema context path
     ↓
 sql_generator.py
     ↓
 llm_client.py
 ```
 
-The Text-to-SQL Agent is responsible for coordination and structured output.
+The Text-to-SQL Agent is responsible for coordination, trusted schema resolution, validation, and structured output.
 
 The `sql_generator.py` service is responsible for SQL prompt creation and LLM-based SQL generation.
 
@@ -116,61 +118,133 @@ This keeps the agent independently testable and avoids mixing local agent logic 
 
 ## Structured Input Decision
 
-The agent accepts a structured Pydantic input model:
+The Text-to-SQL Agent accepts a restricted structured Pydantic input model:
 
 ```python
 TextToSQLAgentInput
 ```
 
-The input includes:
+The final accepted input fields are:
 
-* `dataset_id`
-* `question`
-* optional `schema_context`
-* `model_available`
-* optional `request_id`
-* optional `metadata`
+```text
+dataset_id
+question
+request_id optional
+metadata optional
+```
 
-This makes the agent suitable for future workflow orchestration because the Supervisor Agent can pass already-resolved state into the Text-to-SQL Agent.
+The agent intentionally does not accept:
+
+```text
+schema_context
+schema_profile
+table_name
+columns
+allowed_columns
+raw rows
+```
+
+This correction was made after formalizing the Data Profiler Agent wrapper and clarifying the real product workflow.
+
+In the real system, the user/API should only provide the uploaded dataset identifier and the natural language question. The system must internally resolve trusted schema context from `dataset_id`.
+
+Allowing caller-provided schema context would be misleading and unsafe because it could bypass the actual uploaded CSV metadata stored by the backend.
 
 ---
 
-## Schema Context Resolution Decision
+## Trusted Schema Context Resolution Decision
 
-The Text-to-SQL Agent supports two schema context modes:
+The Text-to-SQL Agent always resolves schema context internally from `dataset_id`.
 
-1. Use a provided schema context.
-2. Build schema context internally from `dataset_id`.
-
-If `schema_context` is provided, the agent uses it directly.
-
-If it is not provided, the agent calls:
-
-```python
-build_schema_context(dataset_id)
-```
-
-from:
+The final flow is:
 
 ```text
-backend/app/services/schema_context_builder.py
+TextToSQLAgentInput(dataset_id, question)
+    -> resolve trusted schema context from dataset_id
+    -> validate schema context
+    -> call SQL generation service
+    -> return structured TextToSQLAgentOutput
 ```
 
-This allows the agent to work both independently and inside a future orchestrated LangGraph workflow.
+The agent uses the existing trusted schema context path / Data Profiler-compatible flow instead of accepting schema metadata from the caller.
+
+This ensures that SQL generation is grounded only in backend-controlled dataset metadata.
+
+The LLM must not be called if trusted schema context cannot be resolved.
+
+If schema context is missing or invalid, the agent returns a structured failure response instead of attempting SQL generation.
+
+---
+
+## Schema Context Security Decision
+
+The Text-to-SQL Agent must never receive schema context, schema profile, table name, or column lists from the user/API layer.
+
+This protects the system from accidental or malicious metadata injection.
+
+The trusted schema context must come from the backend dataset registry / profiler flow associated with the provided `dataset_id`.
+
+This rule supports the project-wide privacy and safety policy:
+
+```text
+User must never provide schema_context or schema_profile manually.
+Agents must resolve trusted schema context internally from dataset_id.
+Raw CSV rows must never be sent to the LLM.
+LLM must not be called if trusted schema context cannot be resolved.
+```
+
+---
+
+## Raw CSV Row Protection Decision
+
+The Text-to-SQL Agent only sends schema metadata and safe summary information to the SQL generation service.
+
+Raw CSV rows must never be sent to the LLM.
+
+The agent validates schema context and rejects suspicious raw-row payload keys such as:
+
+```text
+rows
+records
+raw_rows
+csv_rows
+dataframe
+```
+
+This reinforces the privacy rule that the LLM receives only trusted schema/profile metadata, not raw uploaded data.
 
 ---
 
 ## Schema Context Validation Decision
 
-The agent validates that the schema context contains:
+The agent validates that the resolved schema context contains:
 
-* a valid `table_name`
-* a valid `schema_profile` dictionary
-* a valid `columns` list inside `schema_profile`
+* a valid `table_name`,
+* a valid `schema_profile` dictionary,
+* a valid `columns` list inside `schema_profile`,
+* no raw-row payload keys.
 
-This validation was added because the SQL generator depends on schema metadata to produce safe, schema-aware SQL.
+This validation was added because the SQL generator depends on trusted schema metadata to produce safe, schema-aware SQL.
 
 Invalid schema context results in a structured failure output instead of an unhandled runtime error.
+
+---
+
+## Schema Context Source Decision
+
+The previous design allowed multiple schema context sources, including caller-provided schema context.
+
+That design has been corrected.
+
+The final schema context source is:
+
+```text
+resolved_from_dataset_id
+```
+
+This means the agent always resolves schema context internally from the backend using the provided `dataset_id`.
+
+The agent no longer supports a `provided` schema context source.
 
 ---
 
@@ -178,23 +252,22 @@ Invalid schema context results in a structured failure output instead of an unha
 
 Text-to-SQL generation is LLM-dependent.
 
-If the model/API is unavailable, the agent should not attempt SQL generation.
+The Text-to-SQL Agent itself no longer accepts a caller-provided `model_available` field as input.
 
-The agent accepts:
+Model/API availability is expected to be handled by the upstream routing or supervisor layer before the Text-to-SQL Agent is called.
 
-```python
-model_available: bool
-```
-
-When `model_available` is `False`, the agent returns a structured failure with:
+This keeps `TextToSQLAgentInput` focused on the real product workflow:
 
 ```text
-error_type = model_unavailable
+dataset_id
+question
+request_id optional
+metadata optional
 ```
 
-This follows the project-wide decision that LLM-dependent analytics workflows should not pretend to continue when the model/API is unavailable.
+If the SQL generation service cannot be loaded or fails during execution, the Text-to-SQL Agent returns a structured failure response.
 
-The model availability decision is expected to come from the routing or supervisor layer.
+This preserves predictable downstream behavior without allowing the user/API to control model availability state manually.
 
 ---
 
@@ -227,6 +300,8 @@ This allows tests to use fake dependencies instead of calling the real OpenAI-ba
 
 This decision keeps the agent independently testable and avoids unnecessary external dependency usage during unit tests.
 
+Dependency injection is for internal testing and composition only. It does not mean user/API callers can provide schema context or schema profile manually.
+
 ---
 
 ## Structured Output Decision
@@ -244,7 +319,6 @@ The output includes:
 * `question`
 * generated `sql`
 * `model_required`
-* `model_available`
 * `schema_context_source`
 * `error_type`
 * `error_message`
@@ -270,7 +344,6 @@ The Text-to-SQL Agent returns structured error states instead of raising unhandl
 Supported error types include:
 
 ```text
-model_unavailable
 schema_context_not_found
 invalid_schema_context
 sql_generator_unavailable
@@ -325,24 +398,22 @@ A dedicated unit test file was created:
 backend/tests/agents/test_text_to_sql_agent.py
 ```
 
-The tests cover:
+The updated tests cover:
 
-* successful SQL generation with provided schema context,
-* schema context building when not provided,
-* model unavailable blocking,
-* missing schema context,
+* rejecting caller-provided `schema_context`,
+* rejecting caller-provided `schema_profile`,
+* successful SQL generation after resolving schema context from `dataset_id`,
+* not calling the SQL generator when schema context is missing,
 * invalid table name,
 * invalid schema profile,
 * missing schema columns,
+* raw row payload detection in schema context,
+* raw row payload detection in schema profile,
 * empty SQL generator response,
 * SQL generator failure,
 * result serialization.
 
-The Text-to-SQL Agent test suite passed successfully:
-
-```text
-10 passed
-```
+The Text-to-SQL Agent test suite passed successfully after the cleanup.
 
 ---
 
@@ -350,6 +421,6 @@ The Text-to-SQL Agent test suite passed successfully:
 
 The final Text-to-SQL Agent is a production-style wrapper around the existing SQL generation service.
 
-It provides a clean agent boundary, structured input/output, dependency injection, lazy loading, model availability awareness, schema validation, metadata, and strong unit test coverage.
+It provides a clean agent boundary, restricted structured input, trusted internal schema context resolution, dependency injection, lazy loading, schema validation, raw-row protection, metadata, structured error handling, and strong unit test coverage.
 
 The implementation is ready for future integration into the LangGraph-based Supervisor Agent workflow.
