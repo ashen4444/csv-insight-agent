@@ -31,6 +31,14 @@ from app.agents.sql_validator_agent import (
     SQLValidatorSchemaContextSource,
 )
 
+from app.agents.query_executor_agent import (
+    QueryExecutionStatus,
+    QueryExecutorAgent,
+    QueryExecutorAgentInput,
+    QueryExecutorAgentOutput,
+    QueryExecutorErrorType,
+)
+
 __all__ = [
     "IntentRouterAgent",
     "IntentRouterResult",
@@ -56,4 +64,9 @@ __all__ = [
     "SQLValidationStatus",
     "SQLValidationErrorType",
     "SQLValidatorSchemaContextSource",
+    "QueryExecutorAgent",
+    "QueryExecutorAgentInput",
+    "QueryExecutorAgentOutput",
+    "QueryExecutionStatus",
+    "QueryExecutorErrorType",
 ]
