@@ -5,7 +5,7 @@ import time
 from enum import Enum
 from typing import Any, Callable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.schema_context_builder import build_schema_context
 
@@ -32,16 +32,15 @@ class SQLValidationErrorType(str, Enum):
 
 
 class SQLValidatorSchemaContextSource(str, Enum):
-    PROVIDED = "provided"
     BUILT_FROM_DATASET_ID = "built_from_dataset_id"
 
 
 class SQLValidatorAgentInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     dataset_id: str = Field(..., min_length=1)
     question: str = Field(..., min_length=1)
     sql: str
-
-    schema_context: dict[str, Any] | None = None
 
     request_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -80,7 +79,7 @@ class SQLValidatorAgent:
 
     Responsibilities:
     - Accept structured input.
-    - Resolve schema context.
+    - Resolve trusted schema context internally from dataset_id.
     - Validate basic schema-context shape before calling the service.
     - Call the existing validate_sql service.
     - Convert exception-based validation failures into structured guardrail output.
@@ -120,9 +119,15 @@ class SQLValidatorAgent:
                 error_type=SQLValidationErrorType.EMPTY_SQL,
                 error_message="SQL validation failed because the generated SQL is empty.",
                 blocking_reason="Generated SQL is empty.",
+                sql=None,
+                extra_metadata={
+                    "schema_context_available": False,
+                    "guardrail_passed": False,
+                },
             )
 
-        schema_context, schema_context_source = self._resolve_schema_context(agent_input)
+        schema_context = self.schema_context_builder(agent_input.dataset_id)
+        schema_context_source = SQLValidatorSchemaContextSource.BUILT_FROM_DATASET_ID
 
         if schema_context is None:
             return self._failure(
@@ -131,10 +136,16 @@ class SQLValidatorAgent:
                 validation_status=SQLValidationStatus.ERROR,
                 error_type=SQLValidationErrorType.SCHEMA_CONTEXT_NOT_FOUND,
                 error_message=(
-                    f"Schema context could not be found for dataset_id={agent_input.dataset_id!r}."
+                    f"Trusted schema context could not be found for "
+                    f"dataset_id={agent_input.dataset_id!r}."
                 ),
-                blocking_reason="SQL cannot be validated without schema context.",
+                blocking_reason="SQL cannot be validated without trusted schema context.",
                 sql=normalized_sql,
+                schema_context_source=schema_context_source,
+                extra_metadata={
+                    "schema_context_available": False,
+                    "guardrail_passed": False,
+                },
             )
 
         schema_validation_error = self._validate_schema_context(schema_context)
@@ -146,11 +157,15 @@ class SQLValidatorAgent:
                 validation_status=SQLValidationStatus.ERROR,
                 error_type=SQLValidationErrorType.INVALID_SCHEMA_CONTEXT,
                 error_message=schema_validation_error,
-                blocking_reason="SQL cannot be validated because schema context is invalid.",
-                schema_context_source=schema_context_source,
+                blocking_reason=(
+                    "SQL cannot be validated because trusted schema context is invalid."
+                ),
                 sql=normalized_sql,
+                schema_context_source=schema_context_source,
                 extra_metadata={
+                    "schema_context_available": True,
                     "schema_context_keys": list(schema_context.keys()),
+                    "guardrail_passed": False,
                 },
             )
 
@@ -169,11 +184,13 @@ class SQLValidatorAgent:
                 error_type=SQLValidationErrorType.SQL_VALIDATOR_UNAVAILABLE,
                 error_message=str(exc),
                 blocking_reason="SQL validator service is unavailable.",
-                schema_context_source=schema_context_source,
                 sql=normalized_sql,
+                schema_context_source=schema_context_source,
                 extra_metadata={
                     "table_name": table_name,
+                    "schema_context_available": True,
                     "exception_type": type(exc).__name__,
+                    "guardrail_passed": False,
                 },
             )
 
@@ -203,6 +220,7 @@ class SQLValidatorAgent:
                     "column_count": schema_context.get("column_count"),
                     "schema_column_count": self._count_schema_columns(schema_profile),
                     "schema_context_available": True,
+                    "schema_context_source": schema_context_source.value,
                     "guardrail_passed": True,
                 },
             )
@@ -215,10 +233,11 @@ class SQLValidatorAgent:
                 error_type=SQLValidationErrorType.SQL_VALIDATION_FAILED,
                 error_message=str(exc),
                 blocking_reason=str(exc),
-                schema_context_source=schema_context_source,
                 sql=normalized_sql,
+                schema_context_source=schema_context_source,
                 extra_metadata={
                     "table_name": table_name,
+                    "schema_context_available": True,
                     "exception_type": type(exc).__name__,
                     "guardrail_passed": False,
                 },
@@ -234,28 +253,15 @@ class SQLValidatorAgent:
                 error_type=SQLValidationErrorType.UNEXPECTED_VALIDATION_ERROR,
                 error_message=str(exc),
                 blocking_reason="SQL validation failed due to an unexpected internal error.",
-                schema_context_source=schema_context_source,
                 sql=normalized_sql,
+                schema_context_source=schema_context_source,
                 extra_metadata={
                     "table_name": table_name,
+                    "schema_context_available": True,
                     "exception_type": type(exc).__name__,
                     "guardrail_passed": False,
                 },
             )
-
-    def _resolve_schema_context(
-        self,
-        agent_input: SQLValidatorAgentInput,
-    ) -> tuple[dict[str, Any] | None, SQLValidatorSchemaContextSource | None]:
-        if agent_input.schema_context is not None:
-            return agent_input.schema_context, SQLValidatorSchemaContextSource.PROVIDED
-
-        schema_context = self.schema_context_builder(agent_input.dataset_id)
-
-        if schema_context is None:
-            return None, None
-
-        return schema_context, SQLValidatorSchemaContextSource.BUILT_FROM_DATASET_ID
 
     def _resolve_sql_validator(self) -> SQLValidatorCallable:
         if self.sql_validator is not None:
@@ -270,17 +276,17 @@ class SQLValidatorAgent:
         table_name = schema_context.get("table_name")
 
         if not isinstance(table_name, str) or not table_name.strip():
-            return "Schema context is missing a valid table_name."
+            return "Trusted schema context is missing a valid table_name."
 
         schema_profile = schema_context.get("schema_profile")
 
         if not isinstance(schema_profile, dict):
-            return "Schema context is missing a valid schema_profile dictionary."
+            return "Trusted schema context is missing a valid schema_profile dictionary."
 
         columns = schema_profile.get("columns")
 
-        if not isinstance(columns, list | dict):
-            return "Schema profile is missing valid columns metadata."
+        if not isinstance(columns, (list, dict)):
+            return "Trusted schema profile is missing valid columns metadata."
 
         return None
 
@@ -292,8 +298,8 @@ class SQLValidatorAgent:
         error_type: SQLValidationErrorType,
         error_message: str,
         blocking_reason: str,
+        sql: str | None,
         schema_context_source: SQLValidatorSchemaContextSource | None = None,
-        sql: str | None = None,
         extra_metadata: dict[str, Any] | None = None,
     ) -> SQLValidatorAgentOutput:
         return SQLValidatorAgentOutput(
@@ -321,7 +327,7 @@ class SQLValidatorAgent:
     def _count_schema_columns(schema_profile: dict[str, Any]) -> int:
         columns = schema_profile.get("columns")
 
-        if isinstance(columns, list | dict):
+        if isinstance(columns, (list, dict)):
             return len(columns)
 
         return 0
