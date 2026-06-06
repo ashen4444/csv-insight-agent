@@ -2,7 +2,7 @@
 
 ## Status
 
-Implemented, tested, and ready for commit.
+Implemented, tested, and updated after trusted schema-resolution correction.
 
 ## Agent Name
 
@@ -14,6 +14,7 @@ SQL Validator / Guardrail Agent
 backend/app/agents/sql_validator_agent.py
 backend/tests/agents/test_sql_validator_agent.py
 backend/app/agents/__init__.py
+backend/docs/architecture/sql_validator_agent_decisions.md
 ```
 
 ## Purpose
@@ -22,7 +23,7 @@ The SQL Validator / Guardrail Agent is responsible for validating generated SQL 
 
 Its main purpose is to act as a safety boundary between the Text-to-SQL Agent and the future Query Executor Agent.
 
-The agent ensures that SQL is safe, valid, schema-aware, and suitable for execution against the local DuckDB analytics database.
+The agent ensures that generated SQL is safe, valid, schema-aware, and suitable for execution against the local DuckDB analytics database.
 
 ## Design Decision: Agent Wraps the Existing Validator Service
 
@@ -34,9 +35,85 @@ It wraps the existing service-layer function:
 validate_sql(sql: str, schema_context: dict) -> None
 ```
 
-The service remains responsible for the actual SQL validation rules, while the agent is responsible for structured input/output handling, schema-context resolution, dependency injection, error conversion, and audit metadata.
+The service remains responsible for the actual SQL validation rules, while the agent is responsible for structured input/output handling, trusted schema-context resolution, dependency injection, error conversion, and audit metadata.
 
 This keeps validation logic centralized and avoids maintaining duplicated SQL safety rules in multiple places.
+
+## Design Decision: Trusted Schema Context Must Be Resolved Internally
+
+The SQL Validator / Guardrail Agent does not accept caller-provided schema context, schema profile, table name, or allowed columns.
+
+The input model intentionally does not include:
+
+```text
+schema_context
+schema_profile
+schema_context_override
+table_name
+allowed_columns
+```
+
+The caller provides only:
+
+```text
+dataset_id
+question
+sql
+request_id optional
+metadata optional
+```
+
+The agent internally resolves trusted schema context from `dataset_id`.
+
+This is an important security and correctness decision because SQL validation depends on the real uploaded CSV table name and real schema columns. If callers could provide schema metadata manually, validation could accidentally or intentionally be performed against fake metadata instead of the actual registered dataset.
+
+The trusted flow is:
+
+```text
+SQLValidatorAgentInput
+    dataset_id + question + sql
+        ↓
+SQLValidatorAgent
+        ↓
+build_schema_context(dataset_id)
+        ↓
+validate_sql(sql, trusted_schema_context)
+        ↓
+structured validation output
+```
+
+## Design Decision: User/API Must Never Provide Schema Metadata Manually
+
+The real product workflow should only accept the user question and dataset identifier from the caller.
+
+The system must internally resolve trusted dataset metadata.
+
+This matches the corrected project-wide rule:
+
+```text
+User/API provides dataset_id and question.
+Agents resolve trusted schema context internally from dataset_id.
+Raw CSV rows are never sent to the LLM.
+LLM-dependent agents must not continue if schema context cannot be resolved.
+SQL validation must use the real registered dataset metadata.
+```
+
+For the SQL Validator / Guardrail Agent specifically, this means validation is always based on the trusted schema context resolved from the dataset registry / schema context builder path.
+
+## Design Decision: Extra Input Fields Are Forbidden
+
+The agent input model uses strict input validation to reject unsupported caller-provided fields.
+
+This prevents accidental use of unsafe fields such as:
+
+```text
+schema_context
+schema_profile
+table_name
+allowed_columns
+```
+
+This keeps the agent boundary clean and prevents future workflow code from bypassing the trusted dataset metadata path.
 
 ## Design Decision: No SQL Execution Inside the Agent
 
@@ -85,14 +162,13 @@ The input includes:
 dataset_id
 question
 sql
-schema_context
 request_id
 metadata
 ```
 
-This allows the agent to receive the generated SQL together with the original user question and dataset context.
+The input does not include `schema_context` or `schema_profile`.
 
-The `schema_context` field is optional because the agent can either use a provided schema context or build one from `dataset_id`.
+This keeps the SQL Validator Agent aligned with the trusted schema-resolution rule used by the corrected Text-to-SQL Agent.
 
 ## Design Decision: Structured Output Model
 
@@ -143,10 +219,10 @@ Meaning:
 ```text
 valid   = SQL passed validation and is safe to execute
 blocked = SQL was unsafe, unsupported, malformed, or invalid
-error   = validation could not be completed because of missing context or internal failure
+error   = validation could not be completed because of missing trusted context or internal failure
 ```
 
-This distinction is important because an unsafe SQL query and an internal validation failure are not the same type of problem.
+This distinction is important because unsafe SQL and internal validation failures are different types of problems.
 
 ## Design Decision: Safe Execution Flag
 
@@ -182,7 +258,7 @@ sql: str
 
 This is intentional.
 
-Empty SQL should not be blocked by Pydantic before the agent runs. Empty SQL is a guardrail condition, so the SQL Validator / Guardrail Agent should return structured output such as:
+Empty SQL should not be blocked by Pydantic before the agent runs. Empty SQL is a guardrail condition, so the SQL Validator / Guardrail Agent returns structured output such as:
 
 ```text
 success=False
@@ -196,21 +272,24 @@ This is better for the future LangGraph workflow because the Supervisor Agent ca
 
 Pydantic validation is still kept for identity fields such as:
 
-```python
+```text
 dataset_id
 question
 ```
 
 Only the empty SQL validation responsibility was moved into the guardrail agent.
 
-## Design Decision: Schema Context Support
+## Design Decision: Empty SQL Is Blocked Before Schema Resolution
 
-The agent supports two schema-context flows:
+The agent blocks empty or whitespace-only SQL before resolving schema context.
 
-```text
-1. Use provided schema_context
-2. Build schema_context from dataset_id
-```
+This avoids unnecessary schema lookups when there is no SQL to validate.
+
+The validator service is not called for empty SQL.
+
+## Design Decision: Schema Context Source
+
+The agent resolves schema context internally from `dataset_id`.
 
 This is represented through:
 
@@ -218,18 +297,17 @@ This is represented through:
 SQLValidatorSchemaContextSource
 ```
 
-Supported values:
+Supported value:
 
 ```text
-provided
 built_from_dataset_id
 ```
 
-This keeps the agent flexible for both direct unit testing and future workflow orchestration.
+The previous `provided` schema-context option was removed because caller-provided schema context is not allowed in the production workflow.
 
-## Design Decision: Schema Context Is Validated Before SQL Validation
+## Design Decision: Trusted Schema Context Is Validated Before SQL Validation
 
-Before calling the SQL validator service, the agent checks that schema context contains the required structure.
+Before calling the SQL validator service, the agent checks that the internally resolved schema context contains the required structure.
 
 Required schema-context fields include:
 
@@ -239,7 +317,7 @@ schema_profile
 schema_profile.columns
 ```
 
-If schema context is missing or invalid, the agent returns a structured error and does not call the validator service.
+If trusted schema context is missing or invalid, the agent returns a structured error and does not call the validator service.
 
 This prevents unclear downstream failures and makes debugging easier.
 
@@ -254,7 +332,7 @@ schema_context_builder
 
 This makes the agent independently testable without relying on real database state, real dataset registry entries, or the real validator service during unit tests.
 
-It also supports future production flexibility.
+The injected `schema_context_builder` is used for testing and internal flexibility only. It does not mean callers can provide schema context directly through the agent input.
 
 ## Design Decision: Lazy Loading of the Validator Service
 
@@ -327,6 +405,7 @@ row_count
 column_count
 schema_column_count
 schema_context_available
+schema_context_source
 guardrail_passed
 exception_type
 ```
@@ -338,21 +417,24 @@ This will be useful later for LangSmith, OpenTelemetry, query audit logging, and
 The SQL Validator / Guardrail Agent test file covers:
 
 ```text
-safe SQL validation with provided schema context
-schema context building when not provided
-empty SQL blocking
-whitespace SQL blocking
-missing schema context
-invalid table_name
-invalid schema_profile
-invalid columns metadata
+safe SQL validation using trusted schema context from dataset_id
+rejection of caller-provided schema_context
+rejection of caller-provided table_name
+rejection of caller-provided schema_profile
+rejection of caller-provided allowed_columns
+empty SQL blocking before schema resolution
+whitespace SQL blocking before schema resolution
+missing trusted schema context
+invalid trusted table_name
+invalid trusted schema_profile
+invalid trusted columns metadata
 validator-raised ValueError
 validator service unavailable
 unexpected validator exception
 output serialization using to_dict()
 ```
 
-The full agent test suite passed successfully after implementation.
+The full agent test suite passed successfully after implementation and trusted schema-resolution cleanup.
 
 ## Important Non-Responsibilities
 
@@ -375,6 +457,8 @@ These responsibilities belong to other agents or services in the CSV Insight Age
 
 The SQL Validator / Guardrail Agent is implemented as a production-style guardrail wrapper around the existing SQL validator service.
 
-It provides a structured, testable, schema-aware, audit-friendly safety boundary before SQL execution.
+It provides a structured, testable, trusted-schema-aware, audit-friendly safety boundary before SQL execution.
+
+The final design ensures SQL validation is always based on internally resolved trusted dataset metadata, not caller-provided schema information.
 
 This design is aligned with the overall enterprise-grade multi-agent architecture of the CSV Insight Agent project.
