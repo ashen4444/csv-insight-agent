@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from app.agents.text_to_sql_agent import (
     SchemaContextSource,
     TextToSQLAgent,
@@ -54,7 +57,29 @@ def build_schema_context() -> dict:
     }
 
 
-def test_generates_sql_with_provided_schema_context() -> None:
+def test_input_rejects_caller_provided_schema_context() -> None:
+    with pytest.raises(ValidationError):
+        TextToSQLAgentInput(
+            dataset_id="8d2b0bcd63ad",
+            question="Average salary by country",
+            schema_context=build_schema_context(),
+        )
+
+
+def test_input_rejects_caller_provided_schema_profile() -> None:
+    with pytest.raises(ValidationError):
+        TextToSQLAgentInput(
+            dataset_id="8d2b0bcd63ad",
+            question="Average salary by country",
+            schema_profile={"columns": []},
+        )
+
+
+def test_generates_sql_after_resolving_schema_context_from_dataset_id() -> None:
+    def fake_schema_context_builder(dataset_id):
+        assert dataset_id == "8d2b0bcd63ad"
+        return build_schema_context()
+
     def fake_sql_generator(table_name, schema_profile, question):
         assert table_name == "test_table"
         assert schema_profile["columns"][0]["name"] == "Country"
@@ -65,34 +90,6 @@ def test_generates_sql_with_provided_schema_context() -> None:
             'FROM "test_table" GROUP BY "Country";'
         )
 
-    agent = TextToSQLAgent(sql_generator=fake_sql_generator)
-
-    result = agent.generate(
-        TextToSQLAgentInput(
-            dataset_id="8d2b0bcd63ad",
-            question="Average salary by country",
-            schema_context=build_schema_context(),
-        )
-    )
-
-    assert result.success is True
-    assert result.sql is not None
-    assert "SELECT" in result.sql
-    assert result.error_type is None
-    assert result.schema_context_source == SchemaContextSource.PROVIDED
-    assert result.model_available is True
-    assert result.metadata["agent"] == "TextToSQLAgent"
-    assert result.metadata["service"] == "generate_sql_from_question"
-
-
-def test_builds_schema_context_when_not_provided() -> None:
-    def fake_schema_context_builder(dataset_id):
-        assert dataset_id == "8d2b0bcd63ad"
-        return build_schema_context()
-
-    def fake_sql_generator(table_name, schema_profile, question):
-        return 'SELECT DISTINCT "Country" FROM "test_table";'
-
     agent = TextToSQLAgent(
         sql_generator=fake_sql_generator,
         schema_context_builder=fake_schema_context_builder,
@@ -101,41 +98,31 @@ def test_builds_schema_context_when_not_provided() -> None:
     result = agent.generate(
         TextToSQLAgentInput(
             dataset_id="8d2b0bcd63ad",
-            question="Show countries",
+            question="Average salary by country",
         )
     )
 
     assert result.success is True
-    assert result.sql == 'SELECT DISTINCT "Country" FROM "test_table";'
-    assert result.schema_context_source == SchemaContextSource.BUILT_FROM_DATASET_ID
+    assert result.sql is not None
+    assert "SELECT" in result.sql
+    assert result.error_type is None
+    assert result.schema_context_source == SchemaContextSource.RESOLVED_FROM_DATASET_ID
+    assert result.metadata["agent"] == "TextToSQLAgent"
+    assert result.metadata["service"] == "generate_sql_from_question"
+    assert result.metadata["raw_rows_sent_to_llm"] is False
 
 
-def test_blocks_when_model_unavailable() -> None:
-    def fake_sql_generator(table_name, schema_profile, question):
-        raise AssertionError("SQL generator should not be called.")
-
-    agent = TextToSQLAgent(sql_generator=fake_sql_generator)
-
-    result = agent.generate(
-        TextToSQLAgentInput(
-            dataset_id="8d2b0bcd63ad",
-            question="Average salary by country",
-            model_available=False,
-            schema_context=build_schema_context(),
-        )
-    )
-
-    assert result.success is False
-    assert result.sql is None
-    assert result.error_type == TextToSQLErrorType.MODEL_UNAVAILABLE
-    assert result.model_available is False
-
-
-def test_returns_error_when_schema_context_missing() -> None:
+def test_does_not_call_sql_generator_when_schema_context_missing() -> None:
     def fake_schema_context_builder(dataset_id):
         return None
 
-    agent = TextToSQLAgent(schema_context_builder=fake_schema_context_builder)
+    def fake_sql_generator(table_name, schema_profile, question):
+        raise AssertionError("SQL generator should not be called without schema context.")
+
+    agent = TextToSQLAgent(
+        sql_generator=fake_sql_generator,
+        schema_context_builder=fake_schema_context_builder,
+    )
 
     result = agent.generate(
         TextToSQLAgentInput(
@@ -154,14 +141,14 @@ def test_returns_error_when_table_name_missing() -> None:
     schema_context.pop("table_name")
 
     agent = TextToSQLAgent(
-        sql_generator=lambda table_name, schema_profile, question: "SELECT 1;"
+        sql_generator=lambda table_name, schema_profile, question: "SELECT 1;",
+        schema_context_builder=lambda dataset_id: schema_context,
     )
 
     result = agent.generate(
         TextToSQLAgentInput(
             dataset_id="8d2b0bcd63ad",
             question="Average salary by country",
-            schema_context=schema_context,
         )
     )
 
@@ -175,14 +162,14 @@ def test_returns_error_when_schema_profile_is_invalid() -> None:
     schema_context["schema_profile"] = None
 
     agent = TextToSQLAgent(
-        sql_generator=lambda table_name, schema_profile, question: "SELECT 1;"
+        sql_generator=lambda table_name, schema_profile, question: "SELECT 1;",
+        schema_context_builder=lambda dataset_id: schema_context,
     )
 
     result = agent.generate(
         TextToSQLAgentInput(
             dataset_id="8d2b0bcd63ad",
             question="Average salary by country",
-            schema_context=schema_context,
         )
     )
 
@@ -196,14 +183,14 @@ def test_returns_error_when_schema_columns_missing() -> None:
     schema_context["schema_profile"].pop("columns")
 
     agent = TextToSQLAgent(
-        sql_generator=lambda table_name, schema_profile, question: "SELECT 1;"
+        sql_generator=lambda table_name, schema_profile, question: "SELECT 1;",
+        schema_context_builder=lambda dataset_id: schema_context,
     )
 
     result = agent.generate(
         TextToSQLAgentInput(
             dataset_id="8d2b0bcd63ad",
             question="Average salary by country",
-            schema_context=schema_context,
         )
     )
 
@@ -212,17 +199,67 @@ def test_returns_error_when_schema_columns_missing() -> None:
     assert result.error_type == TextToSQLErrorType.INVALID_SCHEMA_CONTEXT
 
 
-def test_returns_error_when_sql_generator_returns_empty_string() -> None:
-    def fake_sql_generator(table_name, schema_profile, question):
-        return "   "
+def test_returns_error_when_schema_context_contains_raw_row_payload() -> None:
+    schema_context = build_schema_context()
+    schema_context["rows"] = [
+        {"Country": "Sri Lanka", "Average_Salary_USD": 3000}
+    ]
 
-    agent = TextToSQLAgent(sql_generator=fake_sql_generator)
+    agent = TextToSQLAgent(
+        sql_generator=lambda table_name, schema_profile, question: "SELECT 1;",
+        schema_context_builder=lambda dataset_id: schema_context,
+    )
 
     result = agent.generate(
         TextToSQLAgentInput(
             dataset_id="8d2b0bcd63ad",
             question="Average salary by country",
-            schema_context=build_schema_context(),
+        )
+    )
+
+    assert result.success is False
+    assert result.sql is None
+    assert result.error_type == TextToSQLErrorType.INVALID_SCHEMA_CONTEXT
+    assert "raw row payload" in result.error_message
+
+
+def test_returns_error_when_schema_profile_contains_raw_row_payload() -> None:
+    schema_context = build_schema_context()
+    schema_context["schema_profile"]["records"] = [
+        {"Country": "Sri Lanka", "Average_Salary_USD": 3000}
+    ]
+
+    agent = TextToSQLAgent(
+        sql_generator=lambda table_name, schema_profile, question: "SELECT 1;",
+        schema_context_builder=lambda dataset_id: schema_context,
+    )
+
+    result = agent.generate(
+        TextToSQLAgentInput(
+            dataset_id="8d2b0bcd63ad",
+            question="Average salary by country",
+        )
+    )
+
+    assert result.success is False
+    assert result.sql is None
+    assert result.error_type == TextToSQLErrorType.INVALID_SCHEMA_CONTEXT
+    assert "raw row payload" in result.error_message
+
+
+def test_returns_error_when_sql_generator_returns_empty_string() -> None:
+    def fake_sql_generator(table_name, schema_profile, question):
+        return "   "
+
+    agent = TextToSQLAgent(
+        sql_generator=fake_sql_generator,
+        schema_context_builder=lambda dataset_id: build_schema_context(),
+    )
+
+    result = agent.generate(
+        TextToSQLAgentInput(
+            dataset_id="8d2b0bcd63ad",
+            question="Average salary by country",
         )
     )
 
@@ -235,13 +272,15 @@ def test_returns_error_when_sql_generator_fails() -> None:
     def failing_sql_generator(table_name, schema_profile, question):
         raise RuntimeError("LLM request failed")
 
-    agent = TextToSQLAgent(sql_generator=failing_sql_generator)
+    agent = TextToSQLAgent(
+        sql_generator=failing_sql_generator,
+        schema_context_builder=lambda dataset_id: build_schema_context(),
+    )
 
     result = agent.generate(
         TextToSQLAgentInput(
             dataset_id="8d2b0bcd63ad",
             question="Average salary by country",
-            schema_context=build_schema_context(),
         )
     )
 
@@ -256,13 +295,17 @@ def test_result_can_be_serialized_to_dict() -> None:
     def fake_sql_generator(table_name, schema_profile, question):
         return 'SELECT * FROM "test_table" LIMIT 5;'
 
-    agent = TextToSQLAgent(sql_generator=fake_sql_generator)
+    agent = TextToSQLAgent(
+        sql_generator=fake_sql_generator,
+        schema_context_builder=lambda dataset_id: build_schema_context(),
+    )
 
     result = agent.generate(
         TextToSQLAgentInput(
             dataset_id="8d2b0bcd63ad",
             question="Show first 5 rows",
-            schema_context=build_schema_context(),
+            request_id="req_123",
+            metadata={"source": "unit_test"},
         )
     )
 
@@ -270,5 +313,7 @@ def test_result_can_be_serialized_to_dict() -> None:
 
     assert payload["success"] is True
     assert payload["sql"] == 'SELECT * FROM "test_table" LIMIT 5;'
-    assert payload["schema_context_source"] == "provided"
+    assert payload["schema_context_source"] == "resolved_from_dataset_id"
+    assert payload["metadata"]["request_id"] == "req_123"
+    assert payload["metadata"]["source"] == "unit_test"
     assert "metadata" in payload
