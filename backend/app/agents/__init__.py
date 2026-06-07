@@ -51,6 +51,16 @@ from app.agents.data_quality_agent import (
     DataQualityWarningSeverity,
 )
 
+from app.agents.chart_agent import (
+    ChartAgent,
+    ChartAgentErrorType,
+    ChartAgentInput,
+    ChartAgentOutput,
+    ChartGenerationStatus,
+    ChartWarning,
+    ChartWarningSeverity,
+)
+
 __all__ = [
     "IntentRouterAgent",
     "IntentRouterResult",
@@ -90,4 +100,11 @@ __all__ = [
     "DataQualityWarningSeverity",
     "DataQualityRecommendation",
     "DataQualityRecommendationPriority",
+    "ChartAgent",
+    "ChartAgentInput",
+    "ChartAgentOutput",
+    "ChartGenerationStatus",
+    "ChartAgentErrorType",
+    "ChartWarning",
+    "ChartWarningSeverity",
 ]
