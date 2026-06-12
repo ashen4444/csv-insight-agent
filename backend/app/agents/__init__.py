@@ -74,6 +74,14 @@ from app.agents.answer_formatter_agent import (
     AnswerWarningSeverity,
 )
 
+from app.agents.supervisor_agent import (
+    SupervisorAgent,
+    SupervisorAgentInput,
+    SupervisorAgentOutput,
+    SupervisorWorkflowStatus,
+    SupervisorErrorType,
+)
+
 __all__ = [
     "IntentRouterAgent",
     "IntentRouterResult",
@@ -130,5 +138,10 @@ __all__ = [
     "AnswerWarningSeverity",
     "AnswerRecommendation",
     "AnswerRecommendationPriority",
+    "SupervisorAgent",
+    "SupervisorAgentInput",
+    "SupervisorAgentOutput",
+    "SupervisorWorkflowStatus",
+    "SupervisorErrorType",
 
 ]

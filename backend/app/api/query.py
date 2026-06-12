@@ -1,143 +1,177 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from __future__ import annotations
 
-from app.services.schema_context_builder import build_schema_context
-from app.services.sql_validator import validate_sql
-from app.services.query_executor import execute_query
-from app.services.sql_generator import generate_sql_from_question
-from app.services.query_audit_logger import write_query_audit_log
-from app.services.result_analyzer import analyze_results
-from app.services.visualization_intent_detector import detect_visualization_intent
-from app.services.chart_selector import select_chart
-from app.services.chart_payload_builder import build_chart_payload
-from app.services.chart_validator import validate_chart_selection
+import logging
+from functools import lru_cache
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.agents.supervisor_agent import (
+    SupervisorAgent,
+    SupervisorAgentInput,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/query", tags=["Query"])
 
 
-UNSAFE_INTENT_KEYWORDS = {
-    "delete",
-    "remove",
-    "drop",
-    "truncate",
-    "update",
-    "insert",
-    "modify",
-    "alter",
-    "clear",
-    "erase",
-}
-
-
 class QueryRequest(BaseModel):
-    dataset_id: str
-    question: str
+    """
+    Public API request model for dataset questions.
+
+    Important:
+    - Do not accept trusted schema metadata from API callers.
+    - Trusted schema context must be resolved internally by downstream agents
+      using dataset_id.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    dataset_id: str = Field(..., min_length=1)
+    question: str = Field(..., min_length=1)
+
+    request_id: str | None = None
+
+    chart_generation_approved: bool = False
+    approved_chart_type: str | None = None
+
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-def contains_unsafe_intent(question: str) -> bool:
-    question_lower = question.lower()
+@lru_cache(maxsize=1)
+def _get_supervisor_agent_singleton() -> SupervisorAgent:
+    return SupervisorAgent()
 
-    return any(
-        keyword in question_lower
-        for keyword in UNSAFE_INTENT_KEYWORDS
-    )
+
+def get_supervisor_agent() -> SupervisorAgent:
+    """
+    FastAPI dependency boundary for SupervisorAgent.
+
+    This keeps the endpoint thin and makes API tests easy to isolate by
+    overriding this dependency with a fake Supervisor.
+    """
+
+    try:
+        return _get_supervisor_agent_singleton()
+    except RuntimeError as exc:
+        logger.exception("SupervisorAgent is unavailable.")
+
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "success": False,
+                "error_type": "supervisor_unavailable",
+                "message": "Supervisor Agent is unavailable.",
+                "details": str(exc),
+            },
+        ) from exc
 
 
 @router.post("")
-def ask_dataset_question(request: QueryRequest):
-    schema_context = build_schema_context(request.dataset_id)
+def ask_dataset_question(
+    request: QueryRequest,
+    supervisor_agent: SupervisorAgent = Depends(get_supervisor_agent),
+) -> Any:
+    """
+    Delegate query orchestration to SupervisorAgent.
 
-    if schema_context is None:
-        write_query_audit_log({
-            "dataset_id": request.dataset_id,
-            "question": request.question,
-            "status": "dataset_not_found",
-            "error_message": "Dataset not found",
-        })
+    The endpoint intentionally does not:
+    - build schema context,
+    - generate SQL,
+    - validate SQL,
+    - execute SQL,
+    - build chart payloads,
+    - accept trusted schema metadata from the caller.
+    """
 
-        raise HTTPException(status_code=404, detail="Dataset not found")
-
-    if contains_unsafe_intent(request.question):
-        error_message = (
-            "Unsafe data modification requests are not supported. "
-            "Only read-only analytical questions are allowed."
-        )
-
-        write_query_audit_log({
-            "dataset_id": request.dataset_id,
-            "question": request.question,
-            "table_name": schema_context["table_name"],
-            "status": "unsafe_intent_blocked",
-            "error_message": error_message,
-        })
-
-        raise HTTPException(status_code=400, detail=error_message)
-
-    generated_sql = generate_sql_from_question(
-        table_name=schema_context["table_name"],
-        schema_profile=schema_context["schema_profile"],
+    supervisor_input = SupervisorAgentInput(
+        dataset_id=request.dataset_id,
         question=request.question,
+        request_id=request.request_id,
+        chart_generation_approved=request.chart_generation_approved,
+        approved_chart_type=request.approved_chart_type,
+        metadata=request.metadata,
     )
 
-    visualization_intent = detect_visualization_intent(request.question)
-
     try:
-        validate_sql(generated_sql, schema_context)
-        execution_result = execute_query(generated_sql)
-        analysis = analyze_results(
-            results=execution_result["results"],
-            question=request.question,
-            visualization_intent=visualization_intent,
+        supervisor_output = supervisor_agent.run(supervisor_input)
+    except Exception as exc:
+        logger.exception("Unexpected failure while running SupervisorAgent.")
+
+        return JSONResponse(
+            status_code=500,
+            content=_build_unexpected_supervisor_failure_response(
+                request=request,
+                error_message=str(exc),
+            ),
         )
 
-        chart_selection = select_chart(
-            analysis=analysis,
-            visualization_intent=visualization_intent,
-        )
+    return supervisor_output.to_dict()
 
-        chart_payload = build_chart_payload(
-            results=execution_result["results"],
-            analysis=analysis,
-            chart_selection=chart_selection,
-        )
 
-        chart_warning = validate_chart_selection(
-            analysis=analysis,
-            chart_selection=chart_selection,
-            chart_payload=chart_payload,
-        )
-
-    except ValueError as exc:
-        write_query_audit_log({
+def _build_unexpected_supervisor_failure_response(
+    *,
+    request: QueryRequest,
+    error_message: str,
+) -> dict[str, Any]:
+    return {
+        "success": False,
+        "dataset_id": request.dataset_id,
+        "question": request.question,
+        "final_response": {
+            "success": False,
             "dataset_id": request.dataset_id,
             "question": request.question,
-            "table_name": schema_context["table_name"],
-            "generated_sql": generated_sql,
-            "status": "failed",
-            "error_message": str(exc),
-        })
-
-        raise HTTPException(status_code=400, detail=str(exc))
-
-    write_query_audit_log({
-        "dataset_id": request.dataset_id,
-        "question": request.question,
-        "table_name": schema_context["table_name"],
-        "generated_sql": generated_sql,
-        "executed_sql": execution_result["sql"],
-        "row_count": execution_result["row_count"],
-        "execution_time_ms": execution_result["execution_time_ms"],
-        "status": "success",
-        "error_message": None,
-    })
-
-    return {
-        "dataset_id": request.dataset_id,
-        "question": request.question,
-        **execution_result,
-        "analysis": analysis,
-        "visualization_intent": visualization_intent,
-        "chart_selection": chart_selection,
-        "chart_payload": chart_payload,
-        "chart_warning": chart_warning,
+            "response_status": "failed",
+            "response_type": "error_message",
+            "message": (
+                "The query workflow failed unexpectedly before the "
+                "Supervisor Agent could return a response."
+            ),
+            "summary": None,
+            "display_results": [],
+            "display_result_count": 0,
+            "display_columns": [],
+            "chart_available": False,
+            "chart_type": None,
+            "chart_payload": None,
+            "warnings": [],
+            "recommendations": [
+                "Check backend logs for the Supervisor Agent failure details."
+            ],
+            "technical_details": {
+                "api": {
+                    "error_type": "unexpected_supervisor_api_error",
+                    "error_message": error_message,
+                }
+            },
+            "error_type": "unexpected_supervisor_api_error",
+            "error_message": (
+                "Supervisor Agent execution failed before a structured "
+                "SupervisorAgentOutput was returned."
+            ),
+            "blocking_reason": "The API could not complete query orchestration.",
+            "metadata": {
+                "agent": "FastAPIQueryEndpoint",
+                "safe_fallback_response": True,
+            },
+        },
+        "workflow_status": "failed",
+        "executed_agents": [],
+        "skipped_agents": [],
+        "failed_agent": "SupervisorAgent",
+        "error_type": "unexpected_supervisor_api_error",
+        "error_message": (
+            "Supervisor Agent execution failed before a structured "
+            "SupervisorAgentOutput was returned."
+        ),
+        "blocking_reason": "The API could not complete query orchestration.",
+        "execution_time_ms": 0.0,
+        "metadata": {
+            "agent": "FastAPIQueryEndpoint",
+            "safe_fallback_response": True,
+        },
     }
