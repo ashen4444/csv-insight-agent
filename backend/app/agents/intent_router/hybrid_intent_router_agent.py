@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import os
+from app.core.config import settings
 
 from app.agents.intent_router.confidence_policy import ConfidencePolicy
 from app.agents.intent_router.dependency_policy import RoutingDependencyPolicy
@@ -159,4 +159,7 @@ class IntentRouterAgent:
         if self.model_available_override is not None:
             return self.model_available_override
 
-        return bool(os.getenv("OPENAI_API_KEY"))
+        return bool(
+            settings.OPENAI_API_KEY
+            and settings.OPENAI_MODEL
+        )

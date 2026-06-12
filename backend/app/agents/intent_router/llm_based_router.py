@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
-import os
+#import os
 import re
+from app.core.config import settings
 from typing import Any
 
 from app.agents.intent_router.models import (
@@ -295,7 +296,7 @@ Return only valid JSON.
         model_name: str | None,
         temperature: float,
     ) -> Any | None:
-        if not os.getenv("OPENAI_API_KEY"):
+        if not settings.OPENAI_API_KEY:
             return None
 
         try:
@@ -304,11 +305,9 @@ Return only valid JSON.
             return None
 
         return ChatOpenAI(
-            model=model_name or os.getenv(
-                "OPENAI_INTENT_ROUTER_MODEL",
-                "gpt-4o-mini",
-            ),
+            model=model_name or settings.OPENAI_MODEL,
             temperature=temperature,
+            api_key=settings.OPENAI_API_KEY,
         )
 
     @staticmethod
